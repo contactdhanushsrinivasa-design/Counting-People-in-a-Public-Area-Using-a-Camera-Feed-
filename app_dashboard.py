@@ -14,6 +14,7 @@ import tempfile
 from PIL import Image
 import json
 import random
+import hashlib
 
 # Page config
 st.set_page_config(page_title="People Counter Dashboard", layout="wide", page_icon="👥")
@@ -336,6 +337,43 @@ def get_logs():
             return [f"Error reading logs: {e}"]
     return ["No logs found yet. Start the counter to generate logs."]
 
+def register_user_in_firestore(username: str, password: str) -> bool:
+    """
+    Register a new user (role: user) in Firestore.
+    Returns True on success, False if user already exists or on error.
+    """
+    try:
+        username = username.strip()
+        if not username or not password:
+            st.error("❌ Username and password are required.")
+            return False
+
+        # Simple length validation
+        if len(username) < 3:
+            st.error("❌ Username must be at least 3 characters long.")
+            return False
+        if len(password) < 4:
+            st.error("❌ Password must be at least 4 characters long.")
+            return False
+
+        users_collection = db.collection('app_users')
+        user_doc = users_collection.document(username).get()
+        if user_doc.exists:
+            st.error("❌ This username is already registered. Please choose a different one.")
+            return False
+
+        password_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
+        users_collection.document(username).set({
+            'username': username,
+            'password_hash': password_hash,
+            'role': 'user',
+            'created_at': firestore.SERVER_TIMESTAMP,
+        })
+        return True
+    except Exception as e:
+        st.error(f"⚠️ Error during registration: {e}")
+        return False
+
 def show_login_page():
     """Display combined User/Admin login page shown before the app"""
     # Hide sidebar for cleaner login experience
@@ -359,82 +397,146 @@ def show_login_page():
         </div>
         """, unsafe_allow_html=True)
         
-        # Login form with styled container
+        # Login / Register form with styled container
         with st.container():
             st.markdown("""
             <div style="
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 padding: 2px;
                 border-radius: 15px;
-                box-shadow: 0 8px 16px rgba(0,0,0,0.2);
-                margin: 20px 0;
+                box-shadow: 0 8px 16px rgba(0,0,0,0.25);
+                margin: 10px 0 20px 0;
             ">
                 <div style="
-                    background: white;
-                    padding: 40px;
+                    background: rgba(8, 10, 26, 0.85);
+                    padding: 30px 30px 25px 30px;
                     border-radius: 13px;
+                    border: 1px solid rgba(0, 255, 255, 0.2);
                 ">
             """, unsafe_allow_html=True)
-            
-            with st.form("admin_login_form", clear_on_submit=False):
-                st.markdown("###  Access Portal")
-                st.markdown("---")
 
-                role = st.radio("Login as", ["User", "Admin"], horizontal=True, key="login_role")
-                
-                username = st.text_input(" **Username**", placeholder="Enter your username", key="login_username")
-                password = st.text_input(" **Password**", type="password", placeholder="Enter your password", key="login_password")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                col_btn1, col_btn2 = st.columns([1, 1])
-                with col_btn1:
-                    login_button = st.form_submit_button(" **Login**", use_container_width=True, type="primary")
-                with col_btn2:
-                    cancel_button = st.form_submit_button(" **Cancel**", use_container_width=True)
-                
-                if login_button:
-                    # Default credentials (can be changed or moved to config)
-                    if role == "Admin":
-                        valid_username = "admin"
-                        valid_password = "admin123"
-                    else:
-                        valid_username = "user"
-                        valid_password = "user123"
+            tabs = st.tabs(["🔑 Login", "📝 Register"])
+
+            # LOGIN TAB
+            with tabs[0]:
+                with st.form("login_form", clear_on_submit=False):
+                    st.markdown("###  Access Portal")
+                    st.markdown("---")
+
+                    role = st.radio("Login as", ["User", "Admin"], horizontal=True, key="login_role")
                     
-                    if username.strip() == "" or password.strip() == "":
-                        st.error("❌ Please enter both username and password.")
-                    elif username == valid_username and password == valid_password:
-                        # Set global auth state
-                        st.session_state.auth_role = "admin" if role == "Admin" else "user"
-                        st.session_state.is_authenticated = True
-
-                        # Track admin-specific state
-                        if role == "Admin":
-                            st.session_state.admin_logged_in = True
-                            st.session_state.login_time = datetime.now()
+                    username = st.text_input(" **Username**", placeholder="Enter your username", key="login_username")
+                    password = st.text_input(" **Password**", type="password", placeholder="Enter your password", key="login_password")
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    col_btn1, col_btn2 = st.columns([1, 1])
+                    with col_btn1:
+                        login_button = st.form_submit_button(" **Login**", use_container_width=True, type="primary")
+                    with col_btn2:
+                        cancel_button = st.form_submit_button(" **Cancel**", use_container_width=True)
+                    
+                    if login_button:
+                        if username.strip() == "" or password.strip() == "":
+                            st.error("❌ Please enter both username and password.")
                         else:
-                            st.session_state.admin_logged_in = False
-                            st.session_state.login_time = None
+                            # Admin login uses fixed credentials
+                            if role == "Admin":
+                                valid_username = "admin"
+                                valid_password = "admin123"
 
-                        st.session_state.login_attempts = 0
-                        st.success(f"✅ {role} login successful! Redirecting...")
-                        time.sleep(0.5)  # Brief delay for better UX
-                        st.rerun()
-                    else:
-                        st.session_state.login_attempts += 1
-                        remaining = 5 - st.session_state.login_attempts
-                        if st.session_state.login_attempts >= 5:
-                            st.error("🚫 Too many failed attempts. Account temporarily locked.")
-                            st.session_state.login_attempts = 0
-                            time.sleep(2)
-                            st.rerun()
+                                if username == valid_username and password == valid_password:
+                                    st.session_state.auth_role = "admin"
+                                    st.session_state.is_authenticated = True
+                                    st.session_state.admin_logged_in = True
+                                    st.session_state.login_time = datetime.now()
+                                    st.session_state.login_attempts = 0
+                                    st.success("✅ Admin login successful! Redirecting...")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                else:
+                                    st.session_state.login_attempts += 1
+                                    remaining = 5 - st.session_state.login_attempts
+                                    if st.session_state.login_attempts >= 5:
+                                        st.error("🚫 Too many failed attempts. Account temporarily locked.")
+                                        st.session_state.login_attempts = 0
+                                        time.sleep(2)
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ Invalid admin credentials. {remaining} attempts remaining.")
+                            else:
+                                # User login - check Firestore registered users first
+                                try:
+                                    user_doc = db.collection('app_users').document(username.strip()).get()
+                                except Exception as e:
+                                    user_doc = None
+                                    st.error(f"⚠️ Error accessing user records: {e}")
+
+                                authenticated = False
+
+                                if user_doc and user_doc.exists:
+                                    user_data = user_doc.to_dict()
+                                    stored_hash = user_data.get('password_hash', '')
+                                    input_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
+                                    if input_hash == stored_hash:
+                                        authenticated = True
+                                else:
+                                    # Fallback default demo user if not registered
+                                    if username == "user" and password == "user123":
+                                        authenticated = True
+
+                                if authenticated:
+                                    st.session_state.auth_role = "user"
+                                    st.session_state.is_authenticated = True
+                                    st.session_state.admin_logged_in = False
+                                    st.session_state.login_time = None
+                                    st.session_state.login_attempts = 0
+                                    st.success("✅ User login successful! Redirecting...")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                else:
+                                    st.session_state.login_attempts += 1
+                                    remaining = 5 - st.session_state.login_attempts
+                                    if st.session_state.login_attempts >= 5:
+                                        st.error("🚫 Too many failed attempts. Account temporarily locked.")
+                                        st.session_state.login_attempts = 0
+                                        time.sleep(2)
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ Invalid username or password. {remaining} attempts remaining.")
+                    
+                    if cancel_button:
+                        st.info("ℹ️ Login cancelled.")
+
+            # REGISTER TAB (User only)
+            with tabs[1]:
+                with st.form("register_form", clear_on_submit=False):
+                    st.markdown("###  Create New User Account")
+                    st.markdown("---")
+                    new_username = st.text_input(" **Choose a username**", placeholder="e.g. john_doe", key="register_username")
+                    new_password = st.text_input(" **Choose a password**", type="password", placeholder="Enter a password", key="register_password")
+                    confirm_password = st.text_input(" **Confirm password**", type="password", placeholder="Re-enter your password", key="register_confirm_password")
+
+                    st.markdown("<small>Note: Registration creates a regular <b>User</b> account. Admin login stays fixed.</small>", unsafe_allow_html=True)
+
+                    register_button = st.form_submit_button("📝 Register", use_container_width=True)
+
+                    if register_button:
+                        if new_password != confirm_password:
+                            st.error("❌ Passwords do not match.")
                         else:
-                            st.error(f"❌ Invalid username or password. {remaining} attempts remaining.")
-                
-                if cancel_button:
-                    st.info("ℹ️ Login cancelled.")
-            
+                            ok = register_user_in_firestore(new_username, new_password)
+                            if ok:
+                                # Auto-login new user
+                                st.session_state.auth_role = "user"
+                                st.session_state.is_authenticated = True
+                                st.session_state.admin_logged_in = False
+                                st.session_state.login_time = None
+                                st.session_state.login_attempts = 0
+                                st.success("✅ Registration successful! Logging you in...")
+                                time.sleep(0.5)
+                                st.rerun()
+
             st.markdown("</div></div>", unsafe_allow_html=True)
         
         # Show login attempts warning
@@ -815,6 +917,27 @@ elif page == "Video Analysis":
                     'avg_count': avg_count
                 }
                 st.session_state.heatmap_data = all_heatmap_points
+
+                # Update main live counter + history so Viewer Panel and Admin Analytics reflect this video
+                try:
+                    current_inside = int(detection_history[-1]['count']) if detection_history else 0
+                    peak_count = int(max_count)
+                    entered = peak_count
+                    exited = max(0, peak_count - current_inside)
+
+                    people_data = {
+                        'entered': entered,
+                        'exited': exited,
+                        'current_inside': current_inside,
+                        'last_updated': firestore.SERVER_TIMESTAMP,
+                    }
+
+                    # Live document used by Viewer Panel
+                    db.collection('people_counter').document('live').set(people_data)
+                    # Append to history used by Admin Analytics
+                    db.collection('people_counter_history').add(people_data)
+                except Exception as e:
+                    st.warning(f"Unable to update live dashboard data from this analysis: {e}")
                 
                 # Display results
                 st.divider()
@@ -866,25 +989,65 @@ elif page == "Video Analysis":
                     st.subheader("📈 Detection Trends")
                     df_trends = pd.DataFrame(detection_history)
 
-                    # Center and enlarge the line chart
-                    col_left_line, col_center_line, col_right_line = st.columns([0.5, 4, 0.5])
-                    with col_center_line:
-                        fig = px.line(df_trends, x='time', y='count',
-                                     title="People Count Over Time",
-                                     labels={'time': 'Time (seconds)', 'count': 'People Count'})
-                        fig.add_hline(y=st.session_state.threshold, line_dash="dash",
-                                    line_color="red", annotation_text=f"Threshold: {st.session_state.threshold}")
-                        fig.update_layout(height=600)  # Increase height for better visibility
-                        st.plotly_chart(fig, use_container_width=True)
+                    # Full-width line chart with high contrast styling
+                    fig = px.line(
+                        df_trends,
+                        x='time',
+                        y='count',
+                        title="People Count Over Time",
+                        labels={'time': 'Time (seconds)', 'count': 'People Count'},
+                    )
+                    fig.update_traces(line=dict(color="#00e5ff", width=4))
+                    fig.add_hline(
+                        y=st.session_state.threshold,
+                        line_dash="dash",
+                        line_color="#ff4b5c",
+                        annotation_text=f"Threshold: {st.session_state.threshold}",
+                        annotation_position="top right",
+                        annotation_font_color="#ff4b5c",
+                    )
+                    fig.update_layout(
+                        height=550,
+                        margin=dict(l=60, r=40, t=60, b=60),
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#ffffff", size=14),
+                        xaxis=dict(
+                            gridcolor="rgba(255,255,255,0.1)",
+                            zerolinecolor="rgba(255,255,255,0.2)",
+                        ),
+                        yaxis=dict(
+                            gridcolor="rgba(255,255,255,0.1)",
+                            zerolinecolor="rgba(255,255,255,0.2)",
+                        ),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
-                    # Center and enlarge the histogram
-                    col_left_hist, col_center_hist, col_right_hist = st.columns([0.5, 4, 0.5])
-                    with col_center_hist:
-                        fig2 = px.histogram(df_trends, x='count', nbins=20,
-                                          title="Distribution of People Count",
-                                          labels={'count': 'People Count', 'y': 'Frequency'})
-                        fig2.update_layout(height=600)  # Increase height for better visibility
-                        st.plotly_chart(fig2, use_container_width=True)
+                    # Full-width histogram with matching styling
+                    fig2 = px.histogram(
+                        df_trends,
+                        x='count',
+                        nbins=20,
+                        title="Distribution of People Count",
+                        labels={'count': 'People Count', 'y': 'Frequency'},
+                    )
+                    fig2.update_traces(marker_color="#00e5ff")
+                    fig2.update_layout(
+                        height=500,
+                        margin=dict(l=60, r=40, t=60, b=60),
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#ffffff", size=14),
+                        xaxis=dict(
+                            gridcolor="rgba(255,255,255,0.1)",
+                            zerolinecolor="rgba(255,255,255,0.2)",
+                        ),
+                        yaxis=dict(
+                            gridcolor="rgba(255,255,255,0.1)",
+                            zerolinecolor="rgba(255,255,255,0.2)",
+                        ),
+                    )
+                    st.plotly_chart(fig2, use_container_width=True)
 
 elif page == "Admin Panel":
     # Only allow admin role to access this panel
